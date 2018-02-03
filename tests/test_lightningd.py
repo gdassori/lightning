@@ -234,6 +234,7 @@ class BaseLightningDTests(unittest.TestCase):
         if not ok:
             raise Exception("At least one lightning exited with unexpected non-zero return code")
 
+
 class LightningDTests(BaseLightningDTests):
     def connect(self):
         l1 = self.node_factory.get_node()
@@ -244,7 +245,7 @@ class LightningDTests(BaseLightningDTests):
 
         l1.daemon.wait_for_log('WIRE_GOSSIPCTL_HAND_BACK_PEER')
         l2.daemon.wait_for_log('WIRE_GOSSIPCTL_HAND_BACK_PEER')
-        return l1,l2
+        return l1, l2
 
     # Waits until l1 notices funds
     def give_funds(self, l1, satoshi):
@@ -268,14 +269,14 @@ class LightningDTests(BaseLightningDTests):
         l2.daemon.wait_for_log(' to CHANNELD_NORMAL')
 
         # Hacky way to find our output.
-        decoded=bitcoind.rpc.decoderawtransaction(tx)
+        decoded = bitcoind.rpc.decoderawtransaction(tx)
         for out in decoded['vout']:
             # Sometimes a float?  Sometimes a decimal?  WTF Python?!
             if out['scriptPubKey']['type'] == 'witness_v0_scripthash':
                 if out['value'] == Decimal(amount) / 10**8 or out['value'] * 10**8 == amount:
                     return "{}:1:{}".format(bitcoind.rpc.getblockcount(), out['n'])
         # Intermittent decoding failure.  See if it decodes badly twice?
-        decoded2=bitcoind.rpc.decoderawtransaction(tx)
+        decoded2 = bitcoind.rpc.decoderawtransaction(tx)
         raise ValueError("Can't find {} payment in {} (1={} 2={})".format(amount, tx, decoded, decoded2))
 
     def line_graph(self, n=2):
@@ -329,6 +330,7 @@ class LightningDTests(BaseLightningDTests):
                                  for c in channel_ids]
                                 + ['Channel {}\\(1\\) was updated'.format(c)
                                  for c in channel_ids])
+
 
     @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
     def test_shutdown(self):
@@ -804,7 +806,7 @@ class LightningDTests(BaseLightningDTests):
                                l1.rpc.pay, inv, 0)
 
     def test_pay(self):
-        l1,l2 = self.connect()
+        l1, l2 = self.connect()
 
         chanid = self.fund_channel(l1, l2, 10**6)
 
@@ -929,7 +931,7 @@ class LightningDTests(BaseLightningDTests):
         l2.daemon.wait_for_log('to_self_delay 100 larger than 99')
 
     def test_closing(self):
-        l1,l2 = self.connect()
+        l1, l2 = self.connect()
 
         self.fund_channel(l1, l2, 10**6)
         self.pay(l1, l2, 200000000)
@@ -1364,6 +1366,7 @@ class LightningDTests(BaseLightningDTests):
         l1.bitcoin.generate_block(100)
         l2.daemon.wait_for_log('onchaind complete, forgetting peer')
 
+
     @unittest.skipIf(not DEVELOPER, "needs DEVELOPER=1")
     def test_penalty_inhtlc(self):
         """Test penalty transaction with an incoming HTLC"""
@@ -1375,7 +1378,7 @@ class LightningDTests(BaseLightningDTests):
         self.fund_channel(l1, l2, 10**6)
 
         # Now, this will get stuck due to l1 commit being disabled..
-        t = self.pay(l1,l2,100000000,async=True)
+        t = self.pay(l1, l2, 100000000, async=True)
 
         assert len(l1.getactivechannels()) == 1
         assert len(l2.getactivechannels()) == 1
@@ -1414,6 +1417,7 @@ class LightningDTests(BaseLightningDTests):
 
         # l2 should spend all of the outputs (except to-us).
         # Could happen in any order, depending on commitment tx.
+
         l2.daemon.wait_for_logs(['Propose handling THEIR_REVOKED_UNILATERAL/DELAYED_OUTPUT_TO_THEM by OUR_PENALTY_TX .* in 0 blocks',
                                  'sendrawtx exit 0',
                                  'Propose handling THEIR_REVOKED_UNILATERAL/THEIR_HTLC by OUR_PENALTY_TX .* in 0 blocks',
@@ -1424,8 +1428,33 @@ class LightningDTests(BaseLightningDTests):
         # 100 blocks later, all resolved.
         bitcoind.generate_block(100)
 
-        # FIXME: Test wallet balance...
+        # FIXME: l1 crash after cheating and doesn't recover
+        self.assertRaises(ConnectionError, l1.rpc.listfunds)
+        l1.daemon.start()
+        with self.assertRaises(ValueError) as e:
+            l1.daemon.wait_for_logs(
+                [
+                    'Trying to guess public addresses...'
+                    'STATUS_FAIL_INTERNAL_ERROR: Could not find resolution for output 0'
+                    'Subdaemon lightning_onchaind hit error',
+                    'FATAL SIGNAL 6 RECEIVED'
+                ]
+            )
+        assert str(e.exception) == 'Process died while waiting for logs'
+
+
+        # FIXME: enable l1 checkbalance after crash fix
+        # wait_for(lambda: bitcoind.rpc.getblockchaininfo()['blocks'] == l1.rpc.getinfo()['blockheight'], interval=3)
+        # assert l1_funds_before_cheat == sum([x['value'] for x in l1.rpc.listfunds()['outputs']])
+
+        # FIXME: l1 not even recover
+
+        # ensure l2 got funds
+        wait_for(lambda: bitcoind.rpc.getblockchaininfo()['blocks'] == l2.rpc.getinfo()['blockheight'], interval=3)
+        assert sum([x['value'] for x in l2.rpc.listfunds()['outputs']])
+
         l2.daemon.wait_for_log('onchaind complete, forgetting peer')
+
 
     @unittest.skip("flaky test causing CI fails too often")
     def test_penalty_outhtlc(self):
